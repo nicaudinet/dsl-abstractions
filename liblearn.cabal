@@ -32,6 +32,7 @@ executable liblearn
     build-depends:
         liblearn
       , base ^>=4.18.2.1
+      , control-monad-omega
       , QuickCheck
 
     hs-source-dirs:   exe

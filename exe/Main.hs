@@ -1,23 +1,55 @@
 module Main where
 
 import Prelude hiding (LT)
-import Data.List (intercalate, sortOn, unfoldr)
+import Data.List (intercalate)
 import Test.QuickCheck (Arbitrary, arbitrary, quickCheck, frequency)
+import Control.Monad.Omega (Omega, runOmega)
+import Data.Foldable (asum)
 
 main :: IO ()
 main = do
+  part1
+  part2
+
+part1 :: IO ()
+part1 = do
+  putStrLn ""
+  putStrLn "#######"
+  putStrLn "Part 1:"
+  putStrLn "#######"
+  putStrLn ""
+
   putStrLn "The functions:"
   mapM_ (putStrLn . (" - " <>) . render) functions
-  putStrLn "\nTests:"
+  putStrLn ""
+
+  putStrLn "Tests:"
   mapM_ quickCheck tests
-  putStrLn "\nEnumeration:"
-  mapM_ (putStrLn . renderPL) (take 50 (enumerate 2))
-  putStrLn "\nFind Programs:"
-  putStrLn (render (findProgram 0 (\x -> x * 2)))
-  putStrLn (render (findProgram 0.001 (\x -> abs x)))
-  putStrLn (render (findProgram 0.1 (\x -> x + 0.05)))
-  putStrLn (render (findProgram 0.1 (\x -> x ** 2)))
-  putStrLn (render (findProgram 0.1 (\x -> x ** 2 + 1)))
+
+part2 :: IO ()
+part2 = do
+  putStrLn ""
+  putStrLn "#######"
+  putStrLn "Part 2:"
+  putStrLn "#######"
+  putStrLn ""
+
+  putStrLn "Program:\tLog Likelihood:"
+  -- mapM_ (putStrLn . renderProb) (take 50 (enumerate 2))
+  mapM_ (putStrLn . render) (take 20 (runOmega programs))
+  putStrLn ""
+
+  putStrLn "To Find:\t\tEpsilon:\tFound:"
+  findAndPrint "f(x) = x * 2:\t\t" 0 (\x -> x * 2)
+  findAndPrint "f(x) = abs(x):\t\t" 0.001 (\x -> abs x)
+  findAndPrint "f(x) = x + 0.05:\t" 0.1 (\x -> x + 0.05)
+  findAndPrint "f(x) = x ** 2:\t\t" 0.1 (\x -> x ** 2)
+  findAndPrint "f(x) = (x ** 2) + 1:\t" 0.1 (\x -> x ** 2 + 1)
+  findAndPrint "f(x) = cos(x) ** 2:\t" 0.001 (\x -> (cos x) ** 2)
+
+findAndPrint :: String -> Float -> (Float -> Float) -> IO ()
+findAndPrint title epsilon f =
+  putStrLn (title <> show epsilon <> "\t\t" <> render (findProgram epsilon f))
 
 ------------
 -- Part 1 --
@@ -55,8 +87,10 @@ instance Arbitrary Expr where
     , ITE <$> arbitrary <*> arbitrary <*> arbitrary
     ]
 
+bracketed :: String -> String
+bracketed str = "(" <> str <> ")"
 renderBinOp :: String -> Expr -> Expr -> String
-renderBinOp op e1 e2 = "(" <> render e1 <> " " <> op <> " " <> render e2 <> ")"
+renderBinOp op e1 e2 = bracketed $ render e1 <> " " <> op <> " " <> render e2
 
 render :: Expr -> String
 render Zero = "0"
@@ -71,7 +105,7 @@ render (Exp e1 e2) = renderBinOp "^" e1 e2
 render (LT e1 e2) = renderBinOp "<" e1 e2
 render (Sqrt e) = "sqrt(" <> render e <> ")"
 render (Sin e) = "sin(" <> render e <> ")"
-render (ITE e1 e2 e3) = intercalate " "
+render (ITE e1 e2 e3) = bracketed $ intercalate " "
   [ "if", render e1, "< 0"
   , "then", render e2
   , "else", render e3
@@ -120,79 +154,33 @@ tests =
 -- Part 2 --
 ------------
 
--- The Program Likelihood (PL) monad
-data PL a = PL a Float
+-- Functions to group types of nodes together
 
-instance Functor PL where
-  fmap f (PL a like) = PL (f a) like
+-- Another potential approach
+-- https://stackoverflow.com/questions/28100650/generate-all-possible-trees
 
-instance Applicative PL where
-  pure a = PL a 1
-  (PL f l1) <*> (PL a l2) = PL (f a) (l1 + l2)
+-- https://stackoverflow.com/questions/23515191/how-to-enumerate-a-recursive-datatype-in-haskell/23517557#23517557
+sizes :: Omega Expr
+sizes = asum $
+  [ pure Zero
+  , Add <$> sizes <*> sizes
+  ]
 
-renderPL :: PL Expr -> String
-renderPL (PL expr like) = render expr <> "\t" <> show like
-
-nullaries :: [Expr]
-nullaries = [Zero, One, Two, Input]
-
-unaries :: [Expr -> Expr]
-unaries = [Sqrt, Sin]
-
-binaries :: [Expr -> Expr -> Expr]
-binaries = [Add, Sub, Mul, Div, Exp, LT]
-
-ternaries :: [Expr -> Expr -> Expr -> Expr]
-ternaries = [ITE]
-
-uniform :: a -> PL a
-uniform a = PL a (log $ 1.0 / 12.0) -- number of possible statements from DSL
-
-value :: PL a -> a
-value (PL a _) = a
-
-likelihood :: PL a -> Float
-likelihood (PL _ l) = l
-
-apply2 :: Applicative f => f (a -> b -> c) -> f a -> f b -> f c
-apply2 f a b = f <*> a <*> b
-
-apply3 :: Applicative f => f (a -> b -> c -> d) -> f a -> f b -> f c -> f d
-apply3 f a b c = f <*> a <*> b <*> c
-
-step :: [PL Expr] -> [PL Expr]
-step children = sortOn likelihood programs
-  where
-    parents1 :: [PL Expr]
-    parents1 = (map (<*>) (map uniform unaries)) <*> children
-
-    parents2 :: [PL Expr]
-    parents2 = (map apply2 (map uniform binaries)) <*> children <*> children
-
-    parents3 :: [PL Expr]
-    parents3
-      = (map apply3 (map uniform ternaries))
-      <*> children
-      <*> children
-      <*> children
-
-    programs :: [PL Expr]
-    programs = concat [children, parents1, parents2, parents3]
-
-enumerate :: Int -> [PL Expr]
-enumerate = reverse . sortOn likelihood . concat . unfoldr go . (,) (map uniform nullaries)
-  where
-    go :: ([PL Expr], Int) -> Maybe ([PL Expr], ([PL Expr], Int))
-    go (children, n)
-      | n <= 0 = Nothing
-      | otherwise = Just (children, (step children, n - 1))
-
-firstJust :: (a -> Maybe b) -> [a] -> Maybe b
-firstJust _ [] = Nothing
-firstJust f (x:xs) = maybe (firstJust f xs) Just (f x)
-
-unfoldUntil :: (a -> Either a b) -> a -> b
-unfoldUntil f a = either (unfoldUntil f) id (f a)
+programs :: Omega Expr
+programs = asum
+  [ pure Zero
+  , pure One
+  , pure Two
+  , pure Input
+  , Sqrt <$> programs
+  , Sin <$> programs
+  , Add <$> programs <*> programs
+  , Sub <$> programs <*> programs
+  , Mul <$> programs <*> programs
+  , Div <$> programs <*> programs
+  , Exp <$> programs <*> programs
+  , ITE <$> programs <*> programs <*> programs
+  ]
 
 testProgram :: Float -> Expr -> Float -> Float -> Bool
 testProgram epsilon expr input output =
@@ -207,10 +195,38 @@ testAll epsilon fn expr =
   then Just expr
   else Nothing
 
-findProgram :: Float -> (Float -> Float) -> Expr
-findProgram epsilon fn = unfoldUntil go 1
-  where
-    go :: Int -> Either Int Expr
-    go n = case firstJust (testAll epsilon fn) (map value (enumerate n)) of
-      Nothing -> Left (n+1)
-      Just expr -> Right expr
+unfoldUntil :: (a -> Either a b) -> a -> b
+unfoldUntil f a = either (unfoldUntil f) id (f a)
+
+findProgram :: Float -> (Float -> Float) -> Expr 
+findProgram epsilon fn = unfoldUntil go (runOmega programs) where
+  go :: [Expr] -> Either [Expr] Expr
+  go [] = error "infinite lists should never end..."
+  go (p:ps) = maybe (Left ps) Right (testAll epsilon fn p)
+
+
+
+
+-- A simple Applicative for probabilities
+
+data Prob a = Prob a Float
+
+instance Functor Prob where
+  fmap f (Prob a like) = Prob (f a) like
+
+instance Applicative Prob where
+  pure a = Prob a 1
+  (Prob f l1) <*> (Prob a l2) = Prob (f a) (l1 + l2)
+
+renderProb :: Prob Expr -> String
+renderProb (Prob expr like) = render expr <> "\t\t" <> show like
+
+uniform :: a -> Prob a
+uniform a = Prob a (log $ 1.0 / 12.0) -- number of possible statements from DSL
+
+value :: Prob a -> a
+value (Prob a _) = a
+
+likelihood :: Prob a -> Float
+likelihood (Prob _ l) = l
+
