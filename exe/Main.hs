@@ -1,10 +1,15 @@
 module Main where
 
 import Prelude hiding (LT)
-import Data.List (intercalate)
-import Test.QuickCheck (Arbitrary, arbitrary, quickCheck, frequency)
-import Control.Monad.Omega (Omega, runOmega)
-import Data.Foldable (asum)
+import Data.List (intercalate, sortOn)
+import System.Random.MWC.Distributions (standard)
+import Test.QuickCheck (quickCheck)
+import qualified Data.Map as M 
+import qualified Control.Monad.WeightedSearch as W
+import Control.Applicative (asum)
+
+import DSL (Expr)
+import qualified DSL as E
 
 main :: IO ()
 main = do
@@ -34,103 +39,104 @@ part2 = do
   putStrLn "#######"
   putStrLn ""
 
-  putStrLn "Program:\tLog Likelihood:"
-  -- mapM_ (putStrLn . renderProb) (take 50 (enumerate 2))
-  mapM_ (putStrLn . render) (take 20 (runOmega programs))
+  putStrLn (pad 20 "Program:" <> "Likelihood:")
+  mapM_ printWithProb (take 20 (W.toList enumerate))
   putStrLn ""
+  
+  putStrLn (pad 25 "To Find:" <> pad 10 "Epsilon:" <> "Found:")
+  findAndPrint "f(x) = x * 2" 0 (\x -> x * 2)
+  findAndPrint "f(x) = abs(x)" 0.001 (\x -> abs x)
+  findAndPrint "f(x) = x + 0.05" 0.1 (\x -> x + 0.05)
+  findAndPrint "f(x) = x ** 2" 0.1 (\x -> x ** 2)
+  findAndPrint "f(x) = (x ** 2) + 1" 0.1 (\x -> x ** 2 + 1)
+  findAndPrint "f(x) = cos(x) ** 2" 0.001 (\x -> (cos x) ** 2)
+  findAndPrint "f(x) = cos(x)" 0.001 (\x -> cos x)
 
-  putStrLn "To Find:\t\tEpsilon:\tFound:"
-  findAndPrint "f(x) = x * 2:\t\t" 0 (\x -> x * 2)
-  findAndPrint "f(x) = abs(x):\t\t" 0.001 (\x -> abs x)
-  findAndPrint "f(x) = x + 0.05:\t" 0.1 (\x -> x + 0.05)
-  findAndPrint "f(x) = x ** 2:\t\t" 0.1 (\x -> x ** 2)
-  findAndPrint "f(x) = (x ** 2) + 1:\t" 0.1 (\x -> x ** 2 + 1)
-  findAndPrint "f(x) = cos(x) ** 2:\t" 0.001 (\x -> (cos x) ** 2)
+pad :: Int -> String -> String
+pad n str = str <> replicate (n - length str) ' '
+
+printWithProb :: Expr -> IO ()
+printWithProb e = putStrLn (pad 20 (render e) <> show (log $ likelihood e))
 
 findAndPrint :: String -> Float -> (Float -> Float) -> IO ()
-findAndPrint title epsilon f =
-  putStrLn (title <> show epsilon <> "\t\t" <> render (findProgram epsilon f))
+findAndPrint title epsilon f = putStrLn $
+  pad 25 title <> pad 10 (show epsilon) <> render (findProgram epsilon f)
 
 ------------
 -- Part 1 --
 ------------
 
-data Expr
-  = Zero
-  | One
-  | Two
-  | Input
-  | Add Expr Expr
-  | Sub Expr Expr
-  | Mul Expr Expr
-  | Div Expr Expr
-  | Exp Expr Expr
-  | LT Expr Expr
-  | Sqrt Expr
-  | Sin Expr
-  | ITE Expr Expr Expr
-
-instance Arbitrary Expr where
-  arbitrary = frequency $ zip ([1,1,1,1] <> (repeat 0))
-    [ pure Zero
-    , pure One
-    , pure Two
-    , pure Input
-    , Add <$> arbitrary <*> arbitrary
-    , Sub <$> arbitrary <*> arbitrary
-    , Mul <$> arbitrary <*> arbitrary
-    , Div <$> arbitrary <*> arbitrary
-    , Exp <$> arbitrary <*> arbitrary
-    , LT <$> arbitrary <*> arbitrary
-    , Sqrt <$> arbitrary
-    , Sin <$> arbitrary
-    , ITE <$> arbitrary <*> arbitrary <*> arbitrary
-    ]
-
 bracketed :: String -> String
 bracketed str = "(" <> str <> ")"
+
 renderBinOp :: String -> Expr -> Expr -> String
 renderBinOp op e1 e2 = bracketed $ render e1 <> " " <> op <> " " <> render e2
 
 render :: Expr -> String
-render Zero = "0"
-render One = "1"
-render Two = "2"
-render Input = "x"
-render (Add e1 e2) = renderBinOp "+" e1 e2
-render (Sub e1 e2) = renderBinOp "-" e1 e2
-render (Mul e1 e2) = renderBinOp "*" e1 e2
-render (Div e1 e2) = renderBinOp "/" e1 e2
-render (Exp e1 e2) = renderBinOp "^" e1 e2
-render (LT e1 e2) = renderBinOp "<" e1 e2
-render (Sqrt e) = "sqrt(" <> render e <> ")"
-render (Sin e) = "sin(" <> render e <> ")"
-render (ITE e1 e2 e3) = bracketed $ intercalate " "
-  [ "if", render e1, "< 0"
-  , "then", render e2
-  , "else", render e3
-  ]
+render (E.Fix expr) = case expr of
+  E.Zero -> "0"
+  E.One -> "1"
+  E.Two -> "2"
+  E.Pi -> "pi"
+  E.Input -> "x"
+  E.Sqrt e -> "sqrt" <> bracketed (render e)
+  E.Sin e -> "sin" <> bracketed (render e)
+  E.Add e1 e2 -> renderBinOp "+" e1 e2
+  E.Sub e1 e2 -> renderBinOp "-" e1 e2
+  E.Mul e1 e2 -> renderBinOp "*" e1 e2
+  E.Div e1 e2 -> renderBinOp "/" e1 e2
+  E.Exp e1 e2 -> renderBinOp "^" e1 e2
+  E.LT e1 e2 -> renderBinOp "<" e1 e2
+  E.ITE e1 e2 e3 -> bracketed $ intercalate " "
+    [ "if", render e1, "< 0"
+    , "then", render e2
+    , "else", render e3
+    ]
 
-eval :: Float -> Expr -> Float
-eval _ Zero = 0
-eval _ One = 1
-eval _ Two = 2
-eval i Input = i
-eval i (Add e1 e2) = eval i e1 + eval i e2
-eval i (Sub e1 e2) = eval i e1 - eval i e2
-eval i (Mul e1 e2) = eval i e1 * eval i e2
-eval i (Div e1 e2) = eval i e1 / eval i e2
-eval i (Exp e1 e2) = eval i e1 ** eval i e2
-eval i (LT e1 e2) = if eval i e1 < eval i e2 then 1 else -1
-eval i (Sqrt e) = sqrt (eval i e)
-eval i (Sin e) = sin (eval i e)
-eval i (ITE e1 e2 e3) = if eval i e1 < 0 then eval i e2 else eval i e3
+size :: Expr -> Int
+size (E.Fix expr) = case expr of
+  E.Zero -> 1
+  E.One -> 1
+  E.Two -> 1
+  E.Pi -> 1
+  E.Input -> 1
+  E.Sqrt e -> 1 + size e
+  E.Sin e -> 1 + size e
+  E.Add e1 e2 -> 1 + size e1 + size e2
+  E.Sub e1 e2 -> 1 + size e1 + size e2
+  E.Mul e1 e2 -> 1 + size e1 + size e2
+  E.Div e1 e2 -> 1 + size e1 + size e2
+  E.Exp e1 e2 -> 1 + size e1 + size e2
+  E.LT e1 e2 -> 1 + size e1 + size e2
+  E.ITE e1 e2 e3 -> 1 + size e1 + size e2 + size e3
+
+likelihood :: Expr -> Float
+likelihood expr = uniform ** (fromIntegral $ size expr)
+  where
+    uniform = 1 / 13 -- number of DSL nodes (without counting the input)
+
+eval :: Expr -> Float -> Float
+eval (E.Fix expr) i = case expr of
+  E.Zero -> 0
+  E.One -> 1
+  E.Two -> 2
+  E.Pi -> pi
+  E.Input -> i
+  E.Sqrt e -> sqrt (eval e i)
+  E.Sin e -> sin (eval e i)
+  E.Add e1 e2 -> eval e1 i + eval e2 i
+  E.Sub e1 e2 -> eval e1 i - eval e2 i
+  E.Mul e1 e2 -> eval e1 i * eval e2 i
+  E.Div e1 e2 -> eval e1 i / eval e2 i
+  E.Exp e1 e2 -> eval e1 i ** eval e2 i
+  E.LT e1 e2 -> if eval e1 i < eval e2 i then 1 else -1
+  E.ITE e1 e2 e3 -> if eval e1 i < 0 then eval e2 i else eval e3 i
 
 f0, f1, f2, f3 :: Expr
-f0 = Add Input One
-f1 = Add (Exp Input Two) (Div Input (Sin Input))
-f2 = Exp (Add Input Two) Input
-f3 = ITE Input (Exp Input Two) (Sqrt (Add (Exp Input Two) One))
+f0 = E.add E.input E.one
+f1 = E.add (E.exp E.input E.two) (E.div E.input (E.sin E.input))
+f2 = E.exp (E.add E.input E.two) E.input
+f3 = E.ite E.input (E.exp E.input E.two) (E.sqrt (E.add (E.exp E.input E.two) E.one))
 
 functions :: [Expr]
 functions = [f0, f1, f2, f3]
@@ -144,54 +150,53 @@ a ~= b
 
 tests :: [Float -> Bool]
 tests =
-  [ \x -> eval x f0 ~= x + 1
-  , \x -> eval x f1 ~= (x ** 2) + (x / sin x)
-  , \x -> eval x f2 ~= (x + 2) ** x
-  , \x -> eval x f3 ~= if x < 0 then x**2 else sqrt (x**2 + 1)
+  [ \x -> eval f0 x ~= x + 1
+  , \x -> eval f1 x ~= (x ** 2) + (x / sin x)
+  , \x -> eval f2 x ~= (x + 2) ** x
+  , \x -> eval f3 x ~= if x < 0 then x**2 else sqrt (x**2 + 1)
   ]
 
 ------------
 -- Part 2 --
 ------------
 
--- Functions to group types of nodes together
-
--- Another potential approach
--- https://stackoverflow.com/questions/28100650/generate-all-possible-trees
-
 -- https://stackoverflow.com/questions/23515191/how-to-enumerate-a-recursive-datatype-in-haskell/23517557#23517557
-sizes :: Omega Expr
-sizes = asum $
-  [ pure Zero
-  , Add <$> sizes <*> sizes
+-- https://web.archive.org/web/20140823135714/http://lukepalmer.wordpress.com/2008/05/02/enumerating-a-context-free-language/
+enumerate :: W.T Integer Expr
+enumerate = asum $ map (W.weight 1)
+  [ pure E.zero
+  , pure E.one
+  , pure E.two
+  , pure E.pi
+  , pure E.input
+  , E.sqrt <$> enumerate
+  , E.sin <$> enumerate
+  , E.add <$> enumerate <*> enumerate
+  , E.sub <$> enumerate <*> enumerate
+  , E.mul <$> enumerate <*> enumerate
+  , E.div <$> enumerate <*> enumerate
+  , E.exp <$> enumerate <*> enumerate
+  , E.ite <$> enumerate <*> enumerate <*> enumerate
   ]
 
-programs :: Omega Expr
-programs = asum
-  [ pure Zero
-  , pure One
-  , pure Two
-  , pure Input
-  , Sqrt <$> programs
-  , Sin <$> programs
-  , Add <$> programs <*> programs
-  , Sub <$> programs <*> programs
-  , Mul <$> programs <*> programs
-  , Div <$> programs <*> programs
-  , Exp <$> programs <*> programs
-  , ITE <$> programs <*> programs <*> programs
-  ]
+linspace :: Float -> Float -> Int -> [Float]
+linspace start stop num = map scale [0 .. num]
+  where
+    scale :: Int -> Float
+    scale i = start + (fromIntegral i) * (stop - start) / (fromIntegral num)
+
+makeDataset :: (Float -> Float) -> Dataset
+makeDataset fn =
+  let ins = linspace (-2) 2 50
+  in zip ins (map fn ins)
 
 testProgram :: Float -> Expr -> Float -> Float -> Bool
 testProgram epsilon expr input output =
-  abs (output - (eval input expr)) <= epsilon
-
-inputs :: [Float]
-inputs = [(4 * x / 49) - 2 | x <- [0 .. 49]]
+  abs (output - (eval expr input)) <= epsilon
 
 testAll :: Float -> (Float -> Float) -> Expr -> Maybe Expr
 testAll epsilon fn expr =
-  if all (uncurry (testProgram epsilon expr)) (zip inputs (map fn inputs))
+  if all (uncurry (testProgram epsilon expr)) (makeDataset fn)
   then Just expr
   else Nothing
 
@@ -199,34 +204,113 @@ unfoldUntil :: (a -> Either a b) -> a -> b
 unfoldUntil f a = either (unfoldUntil f) id (f a)
 
 findProgram :: Float -> (Float -> Float) -> Expr 
-findProgram epsilon fn = unfoldUntil go (runOmega programs) where
+findProgram epsilon fn = unfoldUntil go (W.toList enumerate) where
   go :: [Expr] -> Either [Expr] Expr
   go [] = error "infinite lists should never end..."
   go (p:ps) = maybe (Left ps) Right (testAll epsilon fn p)
 
+-- Another potential approach:
+-- https://stackoverflow.com/questions/28100650/generate-all-possible-trees
 
+------------
+-- Part 3 --
+------------
 
+numSequences :: Int
+numSequences = 1000
 
--- A simple Applicative for probabilities
+lenSequences :: Int
+lenSequences = 100
 
-data Prob a = Prob a Float
+xs :: [Float]
+xs = linspace (-10) 10 lenSequences
 
-instance Functor Prob where
-  fmap f (Prob a like) = Prob (f a) like
+slack :: Int
+slack = 20
 
-instance Applicative Prob where
-  pure a = Prob a 1
-  (Prob f l1) <*> (Prob a l2) = Prob (f a) (l1 + l2)
+stride :: Int
+stride = 4
 
-renderProb :: Prob Expr -> String
-renderProb (Prob expr like) = render expr <> "\t\t" <> show like
+type Dataset = [(Float, Float)]
 
-uniform :: a -> Prob a
-uniform a = Prob a (log $ 1.0 / 12.0) -- number of possible statements from DSL
+inputs :: Dataset -> [Float]
+inputs = map fst
 
-value :: Prob a -> a
-value (Prob a _) = a
+outputs :: Dataset -> [Float]
+outputs = map snd
 
-likelihood :: Prob a -> Float
-likelihood (Prob _ l) = l
+errors :: Dataset -> Expr -> [Float]
+errors dataset expr =
+  let progOutputs = map (eval expr) (inputs dataset)
+  in zipWith (\x y -> (x - y) ** 2) progOutputs (outputs dataset)
 
+argmin :: [Float] -> [Int]
+argmin = map fst . sortOn snd . zip [0..]
+
+values :: [[Float]]
+values = undefined
+
+-- bestFits :: Int -> [
+
+type Tag = E.ExprF ()
+
+data Bigram = Bigram Tag Tag
+  deriving (Eq, Ord)
+
+tag :: Expr -> Tag
+tag (E.Fix expr) = case expr of
+  E.Zero -> E.Zero
+  E.One -> E.One
+  E.Two -> E.Two
+  E.Pi -> E.Pi
+  E.Input -> E.Input
+  E.Sqrt _ -> E.Sqrt ()
+  E.Sin _ -> E.Sin ()
+  E.Add _ _ -> E.Add () ()
+  E.Sub _ _ -> E.Sub () ()
+  E.Mul _ _ -> E.Mul () ()
+  E.Div _ _ -> E.Div () ()
+  E.Exp _ _ -> E.Exp () ()
+  E.LT _ _ -> E.LT () ()
+  E.ITE _ _ _ -> E.ITE () () ()
+
+bigrams :: Expr -> [Bigram]
+bigrams expr@(E.Fix node) = case node of
+  E.Zero -> []
+  E.One -> []
+  E.Two -> []
+  E.Pi -> []
+  E.Input -> []
+  E.Sqrt c -> bigram1 c
+  E.Sin c -> bigram1 c
+  E.Add c1 c2 -> bigram2 c1 c2
+  E.Sub c1 c2 -> bigram2 c1 c2
+  E.Mul c1 c2 -> bigram2 c1 c2
+  E.Div c1 c2 -> bigram2 c1 c2
+  E.Exp c1 c2 -> bigram2 c1 c2
+  E.LT c1 c2 -> bigram2 c1 c2
+  E.ITE c1 c2 c3 -> bigram3 c1 c2 c3
+  where
+    bigram1 :: Expr -> [Bigram]
+    bigram1 c = [Bigram (tag expr) (tag c)]
+
+    bigram2 :: Expr -> Expr -> [Bigram]
+    bigram2 c1 c2 =
+      [ Bigram (tag expr) (tag c1)
+      , Bigram (tag expr) (tag c2)
+      ]
+
+    bigram3 :: Expr -> Expr -> Expr -> [Bigram]
+    bigram3 c1 c2 c3 =
+      [ Bigram (tag expr) (tag c1)
+      , Bigram (tag expr) (tag c2)
+      , Bigram (tag expr) (tag c3)
+      ]
+
+type Counts = M.Map Bigram Int
+
+count :: [Bigram] -> Counts
+count = foldr go M.empty
+  where
+  go :: Bigram -> Counts -> Counts
+  go bigram = M.insertWith (+) bigram 1

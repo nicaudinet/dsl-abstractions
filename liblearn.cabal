@@ -16,24 +16,25 @@ common warnings
     ghc-options: -Wall
 
 library
-    import:           warnings
-    exposed-modules:  MyLib
-    -- other-modules:
-    -- other-extensions:
-    build-depends:    base ^>=4.18.2.1
-    hs-source-dirs:   src
+    import: warnings
     default-language: Haskell2010
+    hs-source-dirs: src
+    exposed-modules:
+      DSL
+    build-depends:
+        base ^>=4.18.2.1
+      , QuickCheck
 
 executable liblearn
-    import:           warnings
-    main-is:          Main.hs
-    -- other-modules:
-    -- other-extensions:
+    import: warnings
+    default-language: Haskell2010
+    hs-source-dirs: exe
+    main-is: Main.hs
     build-depends:
         liblearn
       , base ^>=4.18.2.1
+      , containers
       , control-monad-omega
+      , mwc-random
       , QuickCheck
-
-    hs-source-dirs:   exe
-    default-language: Haskell2010
+      , weighted-search
